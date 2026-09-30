@@ -14,6 +14,7 @@ undocumented, so schema drift degrades gracefully to static labels.
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -21,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CREDS_FILE = Path(os.environ.get("CLAUDE_CREDS_FILE", "~/.claude/.credentials.json")).expanduser()
+KEYCHAIN_SERVICE = "Claude Code-credentials"  # where Claude Code stores creds on macOS
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "tmux-claude-usage"
 CACHE_FILE = CACHE_DIR / "usage.json"
 CACHE_TTL = 60
@@ -88,11 +90,24 @@ def render_cache_or_warn():
     emit_muted("claude ⚠")
 
 
+def read_creds():
+    """Credentials file on Linux; macOS keeps them in the login Keychain."""
+    try:
+        return CREDS_FILE.read_text()
+    except OSError:
+        if sys.platform != "darwin":
+            raise
+    return subprocess.run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        capture_output=True, text=True, check=True, timeout=3,
+    ).stdout
+
+
 def fetch():
     try:
-        creds = json.loads(CREDS_FILE.read_text())["claudeAiOauth"]
+        creds = json.loads(read_creds())["claudeAiOauth"]
         token = creds["accessToken"]
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         emit_muted("claude ✗")
     # Don't call the API with an expired token (it would 401); running
     # `claude` once refreshes the credentials file.
